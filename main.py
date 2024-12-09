@@ -181,6 +181,7 @@ class GatewayMonitor:
         self.application.add_handler(CommandHandler("status", self.status_command))
         self.application.add_handler(CommandHandler("subscribe", self.subscribe_command))
         self.application.add_handler(CommandHandler("unsubscribe", self.unsubscribe_command))
+        self.application.add_handler(CommandHandler("stats", self.stats_command))  # New admin command
 
         # Initialize the application
         await self.application.initialize()
@@ -409,6 +410,7 @@ class GatewayMonitor:
             "• /status \\- Shows gateway status\n"
             "• /subscribe \\- Monitor a gateway\n"
             "• /unsubscribe \\- Stop monitoring\n"
+            "• /stats \\- Show bot statistics\n"
             "• /help \\- Show this help\n\n"
             "*Status Information:*\n"
             "• 🟢 Online \\- Recent data available\n"
@@ -554,6 +556,43 @@ class GatewayMonitor:
         except Exception as e:
             logger.error(f"Error fetching DER data for {sn}: {e}")
         return None
+
+    async def stats_command(self, update, context):
+        """Handler for /stats command - shows bot usage statistics"""
+        try:
+            # Get stats from database
+            total_users = len(self.db.get_all_users())
+            total_gateways = len(self.db.get_all_gateway_ids())
+            subscriptions = self.db.get_subscription_stats()
+            
+            # Format message
+            message_parts = [
+                "*Sourceful Bot Statistics*",
+                f"Total Users: `{total_users}`",
+                f"Active Gateways: `{total_gateways}`",
+                "",
+                "*Most Monitored Gateways:*"
+            ]
+
+            # Add top 5 gateways by subscription count
+            for gw in subscriptions[:5]:
+                name = self.escape_markdown(gw['name'])
+                message_parts.append(
+                    f"• {name}\n"
+                    f"  Subscribers: `{gw['subscriber_count']}`"
+                )
+
+            await update.message.reply_text(
+                '\n'.join(message_parts),
+                parse_mode='MarkdownV2'
+            )
+
+        except Exception as e:
+            logger.error(f"Error getting stats: {e}")
+            await update.message.reply_text(
+                "Error getting statistics\\. Please try again later\\.",
+                parse_mode='MarkdownV2'
+            )
 
 def main():
     """Main entry point"""

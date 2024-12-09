@@ -370,3 +370,33 @@ class Database:
                 WHERE chat_id = ? AND gateway_id = ?
             ''', (chat_id, gateway_id))
             return cursor.rowcount > 0
+
+    def get_all_users(self) -> List[int]:
+        """Get all unique users"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT DISTINCT chat_id FROM subscriptions')
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_subscription_stats(self) -> List[Dict]:
+        """Get statistics about gateway subscriptions"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT 
+                    s.gateway_id,
+                    g.name,
+                    COUNT(s.chat_id) as subscriber_count
+                FROM subscriptions s
+                JOIN gateway_status g ON s.gateway_id = g.gateway_id
+                GROUP BY s.gateway_id
+                ORDER BY subscriber_count DESC
+            ''')
+            return [
+                {
+                    'gateway_id': row[0],
+                    'name': row[1],
+                    'subscriber_count': row[2]
+                }
+                for row in cursor.fetchall()
+            ]
