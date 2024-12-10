@@ -1,0 +1,16 @@
+version: '3.3'
+
+services:
+  bot:
+    build: .
+    container_name: srcful-tg-bot-dev
+    env_file: .env.dev
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3" 
