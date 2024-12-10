@@ -562,14 +562,14 @@ class GatewayMonitor:
         try:
             # Get stats from database
             total_users = len(self.db.get_all_users())
-            total_gateways = len(self.db.get_all_gateway_ids())
             subscriptions = self.db.get_subscription_stats()
+            monitored_gateways = len(set(sub['gateway_id'] for sub in subscriptions))
             
             # Format message
             message_parts = [
                 "*Sourceful Bot Statistics*",
                 f"Total Users: `{total_users}`",
-                f"Active Gateways: `{total_gateways}`",
+                f"Monitored Gateways: `{monitored_gateways}`",
                 "",
                 "*Most Monitored Gateways:*"
             ]
