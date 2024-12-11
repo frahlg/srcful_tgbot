@@ -31,7 +31,9 @@ API_URL = os.getenv('API_URL', 'https://api.srcful.dev/')
 AUTH_TOKEN = os.getenv('AUTH_TOKEN')
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '60'))  # seconds
 DB_PATH = os.getenv('DB_PATH', 'bot_data.db')
-DEFAULT_TIMEOUT_MINUTES = 10  # Default timeout for considering a gateway offline
+
+# Bot version
+VERSION = "0.1.3"
 
 if not all([TELEGRAM_TOKEN, AUTH_TOKEN]):
     raise ValueError("Missing required environment variables: TELEGRAM_TOKEN and AUTH_TOKEN must be set")
@@ -96,7 +98,7 @@ class GatewayMonitor:
                             continue
 
                         gateway_data, der_latest_data = result
-                        is_online = self.check_gateway_status(gateway_data, der_latest_data)
+                        is_online = self.check_gateway_status(gateway_data, der_latest_data, chat_id=None)
                         
                         # Get latest timestamp from DER data
                         latest_ts = None
@@ -171,6 +173,8 @@ class GatewayMonitor:
 
     async def setup(self):
         """Initialize the application"""
+        logger.info(f"Starting Sourceful Bot v{VERSION}")
+        
         # Initialize application
         self.application = Application.builder().token(TELEGRAM_TOKEN).build()
         self.bot = self.application.bot
@@ -181,7 +185,8 @@ class GatewayMonitor:
         self.application.add_handler(CommandHandler("status", self.status_command))
         self.application.add_handler(CommandHandler("subscribe", self.subscribe_command))
         self.application.add_handler(CommandHandler("unsubscribe", self.unsubscribe_command))
-        self.application.add_handler(CommandHandler("stats", self.stats_command))  # New admin command
+        self.application.add_handler(CommandHandler("stats", self.stats_command))
+        self.application.add_handler(CommandHandler("threshold", self.threshold_command))
 
         # Initialize the application
         await self.application.initialize()
@@ -201,6 +206,34 @@ class GatewayMonitor:
         try:
             # Setup the application
             await self.setup()
+            logger.info(f"Bot v{VERSION} starting up...")
+            
+            # Send startup message to console
+            startup_message = (
+                "\n"
+                "====================================\n"
+                f"🤖 Sourceful Bot v{VERSION} is running\n"
+                "====================================\n"
+            )
+            print(startup_message)
+            logger.info(startup_message)
+
+            # Send startup message to all users - simplified
+            try:
+                users = self.db.get_all_users()
+                logger.info(f"Found {len(users)} users to notify")
+                
+                for chat_id in users:
+                    try:
+                        await self.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"🤖 *{self.escape_markdown(f'Sourceful Bot v{VERSION}')}* is running\\!",
+                            parse_mode='MarkdownV2'
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send startup message to {chat_id}: {e}")
+            except Exception as e:
+                logger.error(f"Error sending startup notifications: {e}")
             
             # Start polling task
             polling_task = asyncio.create_task(self.start_polling())
@@ -210,11 +243,48 @@ class GatewayMonitor:
                 await asyncio.sleep(1)
                 
         except Exception as e:
-            logger.error(f"Error running bot: {e}")
+            logger.error(f"Error in run: {str(e)}")
+            logger.exception(e)
             raise
         finally:
             # Cleanup
             await self.shutdown()
+
+    async def announce_version(self):
+        """Announce bot version to users"""
+        try:
+            logger.info("Getting users for version announcement...")
+            users = self.db.get_all_users()
+            logger.info(f"Found {len(users)} users to notify")
+            
+            if not users:
+                logger.info("No users found in database")
+                return
+
+            message = (
+                f"🤖 *Sourceful Bot v{VERSION}*\n"
+                f"Bot is running and ready\\!"
+            )
+            
+            logger.info(f"Starting to send version {VERSION} announcements...")
+            sent_count = 0
+            for chat_id in users:
+                try:
+                    logger.info(f"Sending to chat_id: {chat_id}")
+                    await self.bot.send_message(
+                        chat_id=chat_id,
+                        text=message,
+                        parse_mode='MarkdownV2'
+                    )
+                    sent_count += 1
+                    logger.info(f"Successfully sent to {chat_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send to {chat_id}: {str(e)}")
+            
+            logger.info(f"Version announcement completed. Sent to {sent_count}/{len(users)} users")
+        except Exception as e:
+            logger.error(f"Error in announce_version: {str(e)}")
+            logger.exception(e)
 
     def parse_timestamp(self, ts):
         """Parse timestamp from either milliseconds or ISO format"""
@@ -247,13 +317,16 @@ class GatewayMonitor:
             logger.error(f"Error parsing timestamp {ts}: {e}")
             return None
 
-    def check_gateway_status(self, gateway_data, der_latest_data):
+    def check_gateway_status(self, gateway_data, der_latest_data, chat_id=None):
         """
-        Check if gateway is online based on latest datapoint
+        Check if gateway is online based on latest datapoint and user threshold
         Returns: bool indicating if gateway is online
         """
         if not gateway_data or 'ders' not in gateway_data:
             return False
+
+        # Get user's threshold (default 5 minutes if not set)
+        threshold_minutes = self.db.get_user_threshold(chat_id) if chat_id else 5
 
         # Get the most recent timestamp from any DER
         latest_ts = None
@@ -269,9 +342,9 @@ class GatewayMonitor:
         if not latest_ts:
             return False
 
-        # Check if the latest timestamp is within the last minute
+        # Check if the latest timestamp is within the threshold
         now = datetime.now(timezone.utc)
-        return (now - latest_ts).total_seconds() <= 60  # 1 minute threshold
+        return (now - latest_ts).total_seconds() <= (threshold_minutes * 60)
 
     def escape_markdown(self, text: str) -> str:
         """Escape special characters for MarkdownV2 format"""
@@ -377,7 +450,7 @@ class GatewayMonitor:
                     continue
 
                 gateway_data, der_latest_data = result
-                is_online = self.check_gateway_status(gateway_data, der_latest_data)
+                is_online = self.check_gateway_status(gateway_data, der_latest_data, chat_id)
                 message = self.format_status_message(gateway_data, is_online, der_latest_data)
                 status_messages.append(message)
             
@@ -391,39 +464,59 @@ class GatewayMonitor:
 
     async def start_command(self, update, context):
         """Handler for /start command"""
+        chat_id = update.effective_chat.id
         welcome_message = (
-            "👋 *Welcome to Srcful Monitor\\!*\n\n"
-            "I help you track gateway status and send notifications\\.\n\n"
+            f"👋 *{self.escape_markdown(f'Welcome to Sourceful Monitor v{VERSION}')}\\!*\n\n"
+            "I help you track gateway status and send notifications\\!\n\n"
             "*Quick Start:*\n"
             "• /status \\- Check gateways\n"
             "• /subscribe \\- Add gateway\n"
+            "• /threshold \\- Set check interval\n"
             "• /help \\- More info\n\n"
             "Start by using /subscribe with your gateway ID\\!"
         )
         await update.message.reply_text(welcome_message, parse_mode='MarkdownV2')
+        # Store user in settings if not exists
+        self.db.ensure_user_exists(chat_id)
 
     async def help_command(self, update, context):
         """Handler for /help command"""
+        if not update.message:
+            logger.error("Help command received but message is None")
+            return
+
+        threshold = self.db.get_user_threshold(update.effective_chat.id)
         help_message = (
-            "📚 *Srcful Gateway Monitor Help*\n\n"
+            f"📚 *{self.escape_markdown(f'Sourceful Monitor v{VERSION}')}*\n\n"
             "*Commands:*\n"
+            "• /start \\- Initialize bot\n"
             "• /status \\- Shows gateway status\n"
             "• /subscribe \\- Monitor a gateway\n"
             "• /unsubscribe \\- Stop monitoring\n"
+            "• /threshold \\- Set status check interval\n"
             "• /stats \\- Show bot statistics\n"
             "• /help \\- Show this help\n\n"
             "*Status Information:*\n"
-            "• 🟢 Online \\- Recent data available\n"
-            "• 🔴 Offline \\- No recent data\n\n"
-            "*Example:*\n"
-            "To monitor a gateway:\n"
-            "`/subscribe 01233d032a7c838bee`"
+            f"• 🟢 Online \\- Data within {threshold} minutes\n"
+            f"• 🔴 Offline \\- No data for {threshold}\\+ minutes\n"
+            "• Power production in watts\n"
+            "• DER information \\(name, make, power\\)\n\n"
+            "*Examples:*\n"
+            "Monitor a gateway:\n"
+            "`/subscribe 01233d032a7c838bee`\n\n"
+            "Change status threshold:\n"
+            "`/threshold 10` \\(10 minutes\\)"
         )
         await update.message.reply_text(help_message, parse_mode='MarkdownV2')
 
     async def subscribe_command(self, update, context):
         """Handler for /subscribe command"""
+        chat_id = update.effective_chat.id
+        logger.info(f"Subscribe command received from chat_id: {chat_id}")
+        
+        # Check if a gateway ID was provided
         if not context.args:
+            logger.info(f"No gateway ID provided by chat_id: {chat_id}")
             await update.message.reply_text(
                 "❗️ Please provide a gateway ID\\.\n"
                 "Example: `/subscribe 01233d032a7c838bee`",
@@ -432,11 +525,12 @@ class GatewayMonitor:
             return
 
         gateway_id = context.args[0]
-        chat_id = update.effective_chat.id
+        logger.info(f"Subscribe request from {chat_id} for gateway {gateway_id}")
 
         # Verify gateway exists
         result = await self.fetch_gateway_status(gateway_id)
         if not result:
+            logger.warning(f"Invalid gateway ID attempted: {gateway_id} by chat_id: {chat_id}")
             await update.message.reply_text(
                 "❌ Invalid gateway ID or gateway not found\\.\n"
                 "Please check the ID and try again\\.",
@@ -446,15 +540,20 @@ class GatewayMonitor:
 
         gateway_data, _ = result
         if self.db.add_subscription(chat_id, gateway_id):
+            # Also ensure user exists in settings
+            self.db.ensure_user_exists(chat_id)
+            
             await update.message.reply_text(
                 f"✅ Successfully subscribed to gateway:\n"
-                f"Name: {gateway_data['name']}\n"
+                f"Name: {self.escape_markdown(gateway_data['name'])}\n"
                 f"ID: `{gateway_id}`\n\n"
                 f"You'll receive notifications when status changes\\.\n"
                 f"Use /status to check current status\\.",
                 parse_mode='MarkdownV2'
             )
+            logger.info(f"Successfully subscribed chat_id: {chat_id} to gateway: {gateway_id}")
         else:
+            logger.info(f"chat_id: {chat_id} already subscribed to gateway: {gateway_id}")
             await update.message.reply_text(
                 "You're already subscribed to this gateway\\.\n"
                 "Use /status to check current status\\.",
@@ -591,6 +690,54 @@ class GatewayMonitor:
             logger.error(f"Error getting stats: {e}")
             await update.message.reply_text(
                 "Error getting statistics\\. Please try again later\\.",
+                parse_mode='MarkdownV2'
+            )
+
+    async def threshold_command(self, update, context):
+        """Handler for /threshold command"""
+        chat_id = update.effective_chat.id
+        
+        # Check if a threshold value was provided
+        if not context.args:
+            current_threshold = self.db.get_user_threshold(chat_id)
+            await update.message.reply_text(
+                f"Current threshold is `{current_threshold}` minutes\\.\n"
+                f"To change it, use: `/threshold <minutes>`\n"
+                f"Example: `/threshold 10` for 10 minutes",
+                parse_mode='MarkdownV2'
+            )
+            return
+
+        try:
+            minutes = int(context.args[0])
+            if minutes < 1:
+                await update.message.reply_text(
+                    "❌ Threshold must be at least 1 minute\\.",
+                    parse_mode='MarkdownV2'
+                )
+                return
+            
+            if minutes > 60:
+                await update.message.reply_text(
+                    "❌ Threshold cannot be more than 60 minutes\\.",
+                    parse_mode='MarkdownV2'
+                )
+                return
+
+            if self.db.set_user_threshold(chat_id, minutes):
+                await update.message.reply_text(
+                    f"✅ Threshold updated to `{minutes}` minutes\\.",
+                    parse_mode='MarkdownV2'
+                )
+            else:
+                await update.message.reply_text(
+                    "❌ Failed to update threshold\\. Please try again\\.",
+                    parse_mode='MarkdownV2'
+                )
+
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Please provide a valid number of minutes\\.",
                 parse_mode='MarkdownV2'
             )
 

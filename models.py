@@ -41,6 +41,17 @@ class Database:
                     FOREIGN KEY (gateway_id) REFERENCES gateway_status(gateway_id)
                 )
             ''')
+
+            # Create user settings table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    chat_id INTEGER PRIMARY KEY,
+                    threshold_minutes INTEGER NOT NULL DEFAULT 5,
+                    last_version_seen TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            ''')
             
             conn.commit()
 
@@ -352,13 +363,21 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                now = datetime.now(timezone.utc).isoformat()
+                logger.info(f"Adding subscription: chat_id={chat_id}, gateway_id={gateway_id}")
                 cursor.execute('''
                     INSERT INTO subscriptions (chat_id, gateway_id, created_at)
                     VALUES (?, ?, ?)
-                ''', (chat_id, gateway_id, datetime.now(timezone.utc).isoformat()))
+                ''', (chat_id, gateway_id, now))
                 conn.commit()
+                logger.info("Subscription added successfully")
                 return True
         except sqlite3.IntegrityError:
+            logger.info(f"Subscription already exists: chat_id={chat_id}, gateway_id={gateway_id}")
+            return False
+        except Exception as e:
+            logger.error(f"Error adding subscription: {str(e)}")
+            logger.exception(e)
             return False
 
     def remove_subscription(self, chat_id: int, gateway_id: str) -> bool:
@@ -373,10 +392,28 @@ class Database:
 
     def get_all_users(self) -> List[int]:
         """Get all unique users"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT DISTINCT chat_id FROM subscriptions')
-            return [row[0] for row in cursor.fetchall()]
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                logger.info("Executing query to get all users...")
+                
+                # Get users from both subscriptions and user_settings
+                cursor.execute('''
+                    SELECT DISTINCT chat_id 
+                    FROM (
+                        SELECT chat_id FROM subscriptions
+                        UNION
+                        SELECT chat_id FROM user_settings
+                    )
+                ''')
+                users = [row[0] for row in cursor.fetchall()]
+                logger.info(f"Database query returned {len(users)} users")
+                return users
+        except Exception as e:
+            logger.error("Error getting users from database")
+            logger.error(f"Error details: {str(e)}")
+            logger.exception(e)
+            return []
 
     def get_subscription_stats(self) -> List[Dict]:
         """Get statistics about gateway subscriptions"""
@@ -400,3 +437,50 @@ class Database:
                 }
                 for row in cursor.fetchall()
             ]
+
+    def get_user_threshold(self, chat_id: int) -> int:
+        """Get user's threshold setting in minutes, default is 5"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT threshold_minutes 
+                FROM user_settings 
+                WHERE chat_id = ?
+            ''', (chat_id,))
+            result = cursor.fetchone()
+            return result[0] if result else 5  # Default to 5 minutes
+
+    def set_user_threshold(self, chat_id: int, minutes: int) -> bool:
+        """Set user's threshold setting in minutes"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                now = datetime.now(timezone.utc).isoformat()
+                cursor.execute('''
+                    INSERT INTO user_settings (chat_id, threshold_minutes, created_at, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(chat_id) DO UPDATE SET
+                        threshold_minutes = excluded.threshold_minutes,
+                        updated_at = excluded.updated_at
+                ''', (chat_id, minutes, now, now))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error setting user threshold: {e}")
+            return False
+
+    def ensure_user_exists(self, chat_id: int) -> None:
+        """Make sure user exists in settings table"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                now = datetime.now(timezone.utc).isoformat()
+                cursor.execute('''
+                    INSERT OR IGNORE INTO user_settings 
+                    (chat_id, threshold_minutes, created_at, updated_at)
+                    VALUES (?, 5, ?, ?)
+                ''', (chat_id, now, now))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error ensuring user exists: {e}")
+            logger.exception(e)
