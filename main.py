@@ -32,7 +32,7 @@ CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '60'))  # seconds
 DB_PATH = os.getenv('DB_PATH', 'bot_data.db')
 
 # Bot version
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 
 if not TELEGRAM_TOKEN:
     raise ValueError("Missing required environment variable: TELEGRAM_TOKEN must be set")
