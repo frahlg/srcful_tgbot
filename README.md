@@ -41,7 +41,6 @@ Current version: 0.1.3
    ```
    TELEGRAM_TOKEN=your_bot_token
    API_URL=https://api.srcful.dev/
-   AUTH_TOKEN=your_auth_token
    CHECK_INTERVAL=60
    ```
 3. Run with Docker:

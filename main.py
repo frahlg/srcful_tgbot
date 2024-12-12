@@ -28,15 +28,14 @@ logger = logging.getLogger(__name__)
 # Configuration from environment variables
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 API_URL = os.getenv('API_URL', 'https://api.srcful.dev/')
-AUTH_TOKEN = os.getenv('AUTH_TOKEN')
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '60'))  # seconds
 DB_PATH = os.getenv('DB_PATH', 'bot_data.db')
 
 # Bot version
 VERSION = "0.1.3"
 
-if not all([TELEGRAM_TOKEN, AUTH_TOKEN]):
-    raise ValueError("Missing required environment variables: TELEGRAM_TOKEN and AUTH_TOKEN must be set")
+if not TELEGRAM_TOKEN:
+    raise ValueError("Missing required environment variable: TELEGRAM_TOKEN must be set")
 
 # Enhanced GraphQL queries
 GATEWAY_QUERY = """
@@ -598,7 +597,6 @@ class GatewayMonitor:
     async def fetch_gateway_status(self, gateway_id):
         """Fetch status for a specific gateway"""
         headers = {
-            "Authorization": f"Bearer {AUTH_TOKEN}",
             "Content-Type": "application/json",
         }
         
@@ -637,7 +635,6 @@ class GatewayMonitor:
     async def fetch_der_data(self, sn):
         """Fetch latest data for a specific DER"""
         headers = {
-            "Authorization": f"Bearer {AUTH_TOKEN}",
             "Content-Type": "application/json",
         }
         
