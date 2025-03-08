@@ -1,6 +1,7 @@
 import asyncio
 import aiohttp
 import logging
+import threading
 from datetime import datetime, timezone, timedelta
 from telegram.ext import Application, CommandHandler, ConversationHandler, MessageHandler, filters
 import json
@@ -8,6 +9,7 @@ import os
 from logging.handlers import RotatingFileHandler
 from models import Database
 import humanize
+from fb_messenger import run_facebook_server
 
 # Configure logging
 os.makedirs('logs', exist_ok=True)
@@ -31,15 +33,21 @@ API_URL = os.getenv('API_URL', 'https://api.srcful.dev/')
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '60'))  # seconds
 DB_PATH = os.getenv('DB_PATH', 'bot_data.db')
 BROADCAST_PASSWORD = os.getenv('BROADCAST_PASSWORD')
+FB_MESSENGER_PORT = int(os.getenv('FB_MESSENGER_PORT', '3001'))
+FB_PAGE_ACCESS_TOKEN = os.getenv('FB_PAGE_ACCESS_TOKEN')
+FB_VERIFY_TOKEN = os.getenv('FB_VERIFY_TOKEN')
 
 # Bot version
-VERSION = "0.1.8"
+VERSION = "0.1.9"
 
 if not TELEGRAM_TOKEN:
-    raise ValueError("Missing required environment variable: TELEGRAM_TOKEN must be set")
+    logger.warning("TELEGRAM_TOKEN not set - Telegram bot functionality will be disabled")
 
 if not BROADCAST_PASSWORD:
     logger.warning("BROADCAST_PASSWORD not set - broadcast functionality will be disabled")
+
+if not all([FB_PAGE_ACCESS_TOKEN, FB_VERIFY_TOKEN]):
+    logger.warning("Facebook Messenger credentials not fully configured - FB functionality may be limited")
 
 # Enhanced GraphQL queries
 GATEWAY_QUERY = """
@@ -89,6 +97,7 @@ class GatewayMonitor:
         self._should_stop = False
         self.application = None
         self.broadcast_data = {}  # Store temporary data for broadcast conversations
+        self.fb_messenger = None  # Reference to Facebook messenger
 
     async def start_polling(self):
         """Start background polling of gateway status"""
@@ -1087,7 +1096,13 @@ class GatewayMonitor:
         message_text = update.message.text.lower().strip()
         chat_id = update.effective_chat.id
         
-        # Simple keyword-based intent detection
+        # First check for common responses
+        response = await self.process_message(message_text)
+        if response:
+            await update.message.reply_text(response, parse_mode='Markdown')
+            return
+            
+        # Check for Telegram-specific commands that need the context object
         
         # Check for status related keywords
         if any(keyword in message_text for keyword in ['status', 'how are my gateways', 'check gateways']):
@@ -1099,11 +1114,6 @@ class GatewayMonitor:
         # Check for statistics related keywords
         elif any(keyword in message_text for keyword in ['stats', 'statistics', 'dashboard', 'energy', 'production', 'power']):
             await self.stats_command(update, context)
-            return
-            
-        # Check for help related keywords
-        elif any(keyword in message_text for keyword in ['help', 'commands', 'what can you do', 'how do i']):
-            await self.help_command(update, context)
             return
             
         # Check for subscription with a gateway ID
@@ -1148,24 +1158,7 @@ class GatewayMonitor:
                 
             await self.threshold_command(update, context)
             return
-            
-        # Greeting messages
-        elif any(keyword in message_text for keyword in ['hi', 'hello', 'hey', 'howdy', 'greetings']):
-            await update.message.reply_text(
-                f"👋 Hello! I'm your energy monitoring assistant. How can I help you today?\n\n"
-                f"You can ask me to check your gateway status, show statistics, or help you subscribe to a gateway.",
-                parse_mode='Markdown'
-            )
-            return
-            
-        # Thank you messages
-        elif any(keyword in message_text for keyword in ['thank', 'thanks', 'thx']):
-            await update.message.reply_text(
-                "You're welcome! I'm here to help with all your energy monitoring needs. Anything else I can do for you?",
-                parse_mode='Markdown'
-            )
-            return
-            
+        
         # Default response for unrecognized messages
         await update.message.reply_text(
             "I'm not sure what you mean. Here are some things you can ask me:\n\n"
@@ -1177,6 +1170,56 @@ class GatewayMonitor:
             "Feel free to ask in your own words or use commands like /status or /help if you prefer.",
             parse_mode='Markdown'
         )
+    
+    async def process_message(self, message_text):
+        """Process a message and return an appropriate response
+        
+        This is a platform-agnostic method that can be used by both Telegram and Facebook
+        
+        Args:
+            message_text: The message text to process
+            
+        Returns:
+            str: The response message to send back to the user, or None if no response
+        """
+        # Simple keyword-based intent detection
+        message_text = message_text.lower().strip()
+        
+        # Greeting messages
+        if any(keyword in message_text for keyword in ['hi', 'hello', 'hey', 'howdy', 'greetings']):
+            return f"👋 Hello! I'm your energy monitoring assistant. How can I help you today?\n\n" \
+                   f"You can ask me to check your gateway status, show statistics, or help you subscribe to a gateway."
+            
+        # Thank you messages
+        elif any(keyword in message_text for keyword in ['thank', 'thanks', 'thx']):
+            return "You're welcome! I'm here to help with all your energy monitoring needs. Anything else I can do for you?"
+        
+        # Help related keywords
+        elif any(keyword in message_text for keyword in ['help', 'commands', 'what can you do', 'how do i']):
+            return "Here's how I can help you:\n\n" \
+                   "• Check gateway status: 'status' or 'check gateways'\n" \
+                   "• View energy production: 'stats' or 'show power'\n" \
+                   "• Subscribe to gateway: 'subscribe' + gateway ID\n" \
+                   "• Set threshold: 'threshold' + minutes\n\n" \
+                   "What would you like to do?"
+        
+        # For now return None for other intents, they will be handled by platform-specific handlers
+        return None
+        
+    # New method for Facebook Messenger integration
+    def handle_facebook_message(self, fb_user_id, message_text):
+        """Handle message from Facebook Messenger
+        
+        Args:
+            fb_user_id: Facebook user ID
+            message_text: Message text content
+            
+        Returns:
+            str: Response to send back to the user
+        """
+        # To be implemented fully later - will process message and respond
+        # This is a placeholder to be expanded
+        return "Thank you for your message. Facebook Messenger integration is coming soon!"
 
 def main():
     """Main entry point"""
@@ -1184,16 +1227,39 @@ def main():
     
     async def run_bot():
         try:
-            await monitor.run()
+            # Only initialize Telegram if token is available
+            if TELEGRAM_TOKEN:
+                await monitor.run()
+            else:
+                logger.warning("Telegram bot not started: TELEGRAM_TOKEN not set")
+                
+                # Keep event loop running for Facebook server
+                while True:
+                    await asyncio.sleep(60)
         except KeyboardInterrupt:
             logger.info("Received shutdown signal")
         except Exception as e:
             logger.error(f"Error in main: {e}")
         finally:
             monitor._should_stop = True
-            await monitor.shutdown()
+            if monitor.application:
+                await monitor.shutdown()
     
-    # Run the bot
+    # Start Facebook Messenger webhook server in a separate thread
+    def start_facebook_server():
+        try:
+            run_facebook_server(port=FB_MESSENGER_PORT, energy_monitor=monitor)
+        except Exception as e:
+            logger.error(f"Error starting Facebook Messenger server: {e}")
+    
+    # Start Facebook server in a separate thread
+    if FB_PAGE_ACCESS_TOKEN and FB_VERIFY_TOKEN:
+        fb_thread = threading.Thread(target=start_facebook_server)
+        fb_thread.daemon = True  # This ensures the thread will exit when the main program exits
+        fb_thread.start()
+        logger.info("Facebook Messenger webhook server started")
+    
+    # Run the Telegram bot in the main thread
     asyncio.run(run_bot())
 
 if __name__ == "__main__":
