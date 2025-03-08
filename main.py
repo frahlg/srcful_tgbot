@@ -30,9 +30,10 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 API_URL = os.getenv('API_URL', 'https://api.srcful.dev/')
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '60'))  # seconds
 DB_PATH = os.getenv('DB_PATH', 'bot_data.db')
+BROADCAST_PASSWORD = os.getenv('BROADCAST_PASSWORD', '')  # Password for broadcast authentication
 
 # Bot version
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 
 if not TELEGRAM_TOKEN:
     raise ValueError("Missing required environment variable: TELEGRAM_TOKEN must be set")
@@ -186,6 +187,7 @@ class GatewayMonitor:
         self.application.add_handler(CommandHandler("unsubscribe", self.unsubscribe_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("threshold", self.threshold_command))
+        self.application.add_handler(CommandHandler("broadcast", self.broadcast_command))
 
         # Initialize the application
         await self.application.initialize()
@@ -485,6 +487,13 @@ class GatewayMonitor:
             return
 
         threshold = self.db.get_user_threshold(update.effective_chat.id)
+        
+        # Check if user is admin
+        user_id = update.effective_user.id
+        admin_ids_str = os.getenv('ADMIN_USER_IDS', '')
+        admin_ids = [int(id.strip()) for id in admin_ids_str.split(',') if id.strip()]
+        is_admin = user_id in admin_ids
+        
         help_message = (
             f"📚 *{self.escape_markdown(f'Sourceful Monitor v{VERSION}')}*\n\n"
             "*Commands:*\n"
@@ -494,8 +503,17 @@ class GatewayMonitor:
             "• /unsubscribe \\- Stop monitoring\n"
             "• /threshold \\- Set status check interval\n"
             "• /stats \\- Show bot statistics\n"
+            "• /broadcast \\- Send message to all users \\(password required\\)\n"
             "• /help \\- Show this help\n\n"
-            "*Status Information:*\n"
+        )
+        
+        # Add admin commands if user is admin
+        if is_admin:
+            help_message += "\n*Admin Commands:*\n"
+            help_message += "• /broadcast \\- Send message to all users\n"
+        
+        help_message += (
+            "\n*Status Information:*\n"
             f"• 🟢 Online \\- Data within {threshold} minutes\n"
             f"• 🔴 Offline \\- No data for {threshold}\\+ minutes\n"
             "• Power production in watts\n"
@@ -506,6 +524,7 @@ class GatewayMonitor:
             "Change status threshold:\n"
             "`/threshold 10` \\(10 minutes\\)"
         )
+        
         await update.message.reply_text(help_message, parse_mode='MarkdownV2')
 
     async def subscribe_command(self, update, context):
@@ -737,6 +756,63 @@ class GatewayMonitor:
                 "❌ Please provide a valid number of minutes\\.",
                 parse_mode='MarkdownV2'
             )
+
+    async def broadcast_command(self, update, context):
+        """Handler for /broadcast command - Password protected"""
+        # Check if a message was provided
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "Please provide the broadcast password and message.\n"
+                "Example: `/broadcast YOUR_PASSWORD System maintenance scheduled for tomorrow`"
+            )
+            return
+        
+        # Extract password and message
+        password = context.args[0]
+        message = ' '.join(context.args[1:])
+        
+        # Check if password is correct
+        if not BROADCAST_PASSWORD or password != BROADCAST_PASSWORD:
+            await update.message.reply_text(
+                "❌ Invalid password. Broadcast cancelled."
+            )
+            logger.warning(f"Invalid broadcast password attempt by user {update.effective_user.id}")
+            return
+        
+        # Get all users
+        users = self.db.get_all_users()
+        sent_count = 0
+        failed_count = 0
+        
+        # Send confirmation to sender
+        await update.message.reply_text(
+            f"Broadcasting message to {len(users)} users..."
+        )
+        
+        # Broadcast the message
+        for chat_id in users:
+            try:
+                # Prepare message with proper escaping for MarkdownV2
+                broadcast_msg = (
+                    f"📢 *ANNOUNCEMENT*\n\n"
+                    f"{self.escape_markdown(message)}"
+                )
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=broadcast_msg,
+                    parse_mode='MarkdownV2'
+                )
+                sent_count += 1
+            except Exception as e:
+                logger.error(f"Failed to send broadcast to {chat_id}: {e}")
+                failed_count += 1
+        
+        # Send summary to sender
+        await update.message.reply_text(
+            f"✅ Broadcast complete!\n"
+            f"Successfully sent: {sent_count}\n"
+            f"Failed: {failed_count}"
+        )
 
 def main():
     """Main entry point"""

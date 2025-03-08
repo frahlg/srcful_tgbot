@@ -2,6 +2,15 @@
 
 All notable changes to the Sourceful Energy Telegram Bot will be documented in this file.
 
+## [0.1.4] - 2024-12-12
+
+### Changed
+- Removed AUTH_TOKEN requirement as it's not needed for API access
+- Fixed message formatting for MarkdownV2 in all bot responses
+- Improved startup message handling
+- Updated environment templates for better consistency
+- Fixed database directory handling in Docker setup
+
 ## [0.1.3] - 2024-12-10
 
 ### Added
