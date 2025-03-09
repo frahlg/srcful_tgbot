@@ -2,16 +2,6 @@
 
 All notable changes to the Sourceful Energy Telegram Bot will be documented in this file.
 
-## [0.1.9] - 2024-03-08
-
-### Added
-- Facebook Messenger integration
-  - Added webhook support at /webhook endpoint
-  - Respond to Facebook Messenger messages
-  - Support for cross-platform messaging
-  - Shared natural language processing for consistent responses
-  - Parallel operation with Telegram bot
-
 ## [0.1.8] - 2024-03-08
 
 ### Added
