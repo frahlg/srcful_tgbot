@@ -2,7 +2,7 @@
 
 A Telegram bot for monitoring Sourceful Energy gateways in real-time. Get instant notifications when your gateways go online or offline, and monitor power production from your DERs (Distributed Energy Resources).
 
-Current version: 0.1.5
+Current version: 0.1.8
 
 ## Features
 
