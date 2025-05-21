@@ -42,13 +42,13 @@ Expected: Should still show the gateway status (subscription persisted)
 
 ## 5. Timeout Testing
 ```
-/set_timeout 5
+/threshold 5
 /status
 ```
 Expected: Different online/offline status with 5-minute timeout
 
 ```
-/set_timeout 15
+/threshold 15
 /status
 ```
 Expected: Different status with 15-minute timeout
